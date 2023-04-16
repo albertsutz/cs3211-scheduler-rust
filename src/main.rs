@@ -1,9 +1,17 @@
 use std::{
-    collections::{HashMap, VecDeque},
-    time::Instant,
+    collections::{HashMap},
+    time::Instant, sync::Mutex,
 };
 
+use threadpool::ThreadPool;
+use std::sync::Arc;
+
 use task::{Task, TaskType};
+
+struct Result {
+    counter: HashMap<TaskType, usize>,
+    res: u64
+}
 
 fn main() {
     let (seed, starting_height, max_children) = get_args();
@@ -12,19 +20,25 @@ fn main() {
         "Using seed {}, starting height {}, max. children {}",
         seed, starting_height, max_children
     );
-
+    let pool = ThreadPool::new();
     let mut count_map = HashMap::new();
-    let mut taskq = VecDeque::from(Task::generate_initial(seed, starting_height, max_children));
-
     let mut output: u64 = 0;
-
+    let mut res = Arc::new(Mutex::new(Result {counter: count_map, res: output}));
+    
     let start = Instant::now();
-    while let Some(next) = taskq.pop_front() {
-        *count_map.entry(next.typ).or_insert(0usize) += 1;
-        let result = next.execute();
-        output ^= result.0;
-        taskq.extend(result.1.into_iter());
+    for task in Task::generate_initial(seed, starting_height, max_children) {
+        let res = res.clone();
+        pool.execute(move || {
+            let res = res.lock().expect("Locking errors");
+            let count_map = res.counter;
+            let output = res.res;
+            *count_map.entry(task.typ).or_insert(0usize) += 1;
+            let result = task.execute();
+            output ^= result.0;
+        });
     }
+
+    
     let end = Instant::now();
 
     eprintln!("Completed in {} s", (end - start).as_secs_f64());
