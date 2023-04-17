@@ -9,7 +9,7 @@ rand_chacha = "0.3"
 ring = "0.16"
 tokio = { version = "1", features = ["full"] }
 threadpool = "1"
-
+num_cpus = "1"
 # You may add dependencies as needed. Before doing so, check the list of
 # approved crates, which will be on the assignment FAQ. If you wish to use a
 # crate not on that list, please ask the teaching team to approve the crate.

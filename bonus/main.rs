@@ -4,11 +4,12 @@ use std::{
     sync::mpsc::channel,
     sync::mpsc::Sender,
     sync::mpsc::Receiver,
+    collections::VecDeque,
 };
 
 use threadpool::ThreadPool;
 
-use task::{Task, TaskType, TaskResult};
+use task::{Task, TaskType, TaskResult, PollableTask};
 
 fn main() {
     let (seed, starting_height, max_children) = get_args();
@@ -17,7 +18,6 @@ fn main() {
         "Using seed {}, starting height {}, max. children {}",
         seed, starting_height, max_children
     );
-
     let cpus = num_cpus::get();
     let pool = ThreadPool::new(cpus);
     let mut count_map: HashMap<TaskType, usize> = HashMap::new();
@@ -26,28 +26,35 @@ fn main() {
     let mut counter: u64 = 0;
     
     let start = Instant::now();
-    for task in Task::generate_initial(seed, starting_height, max_children) {
-        counter += 1;
-        let tx = tx.clone();
-        *count_map.entry(task.typ).or_insert(0usize) += 1;
-        pool.execute(move || {
-            let result = task.execute();
-            tx.send(result).unwrap();
-        });
-    }
+    let mut dummy: VecDeque<PollableTask> = VecDeque::new();
+    let pollable_initial: PollableTask = Task::generate_initial(seed, starting_height, max_children);
+    dummy.push_back(pollable_initial);
 
-    while counter != 0 {
-        let result = rx.recv().unwrap();
-        counter -= 1;
-        output ^= result.0;
-        for task in result.1 {
-            counter += 1;
-            let tx = tx.clone();
-            *count_map.entry(task.typ).or_insert(0usize) += 1;
-            pool.execute(move || {
-                let result = task.execute();
-                tx.send(result).unwrap();
-            });
+    while dummy.len() != 0 || counter != 0 {
+        println!("{} {}", dummy.len(), counter);
+        while counter > 0 {
+            let result: TaskResult = rx.recv().unwrap();
+            counter -= 1;
+            output ^= result.0;
+            dummy.push_back(result.1);
+        }
+        if let Some(mut pollable_now) = dummy.pop_back() {
+            for _i in 0..pollable_now.get_num_task() {
+                if counter > 100000 {
+                    break;
+                }
+                counter += 1;
+                let tx = tx.clone();
+                let task: Task = pollable_now.next_task();
+                *count_map.entry(task.typ).or_insert(0usize) += 1;
+                pool.execute(move || {
+                    let result = task.execute();
+                    tx.send(result).unwrap();
+                });
+            }
+            if pollable_now.get_num_task() > 0 {
+                dummy.push_back(pollable_now);
+            }
         }
     }
     let end = Instant::now();
