@@ -1,9 +1,14 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap},
     time::Instant,
+    sync::mpsc::channel,
+    sync::mpsc::Sender,
+    sync::mpsc::Receiver,
 };
 
-use task::{Task, TaskType};
+use threadpool::ThreadPool;
+
+use task::{Task, TaskType, TaskResult};
 
 fn main() {
     let (seed, starting_height, max_children) = get_args();
@@ -12,18 +17,36 @@ fn main() {
         "Using seed {}, starting height {}, max. children {}",
         seed, starting_height, max_children
     );
-
-    let mut count_map = HashMap::new();
-    let mut taskq = VecDeque::from(Task::generate_initial(seed, starting_height, max_children));
-
+    let pool = ThreadPool::new(8);
+    let mut count_map: HashMap<TaskType, usize> = HashMap::new();
     let mut output: u64 = 0;
-
+    let (tx, rx): (Sender<TaskResult>, Receiver<TaskResult>) = channel();
+    let mut counter: u64 = 0;
+    
     let start = Instant::now();
-    while let Some(next) = taskq.pop_front() {
-        *count_map.entry(next.typ).or_insert(0usize) += 1;
-        let result = next.execute();
+    for task in Task::generate_initial(seed, starting_height, max_children) {
+        counter += 1;
+        let tx = tx.clone();
+        *count_map.entry(task.typ).or_insert(0usize) += 1;
+        pool.execute(move || {
+            let result = task.execute();
+            tx.send(result).unwrap();
+        });
+    }
+
+    while counter != 0 {
+        let result = rx.recv().unwrap();
+        counter -= 1;
         output ^= result.0;
-        taskq.extend(result.1.into_iter());
+        for task in result.1 {
+            counter += 1;
+            let tx = tx.clone();
+            *count_map.entry(task.typ).or_insert(0usize) += 1;
+            pool.execute(move || {
+                let result = task.execute();
+                tx.send(result).unwrap();
+            });
+        }
     }
     let end = Instant::now();
 
